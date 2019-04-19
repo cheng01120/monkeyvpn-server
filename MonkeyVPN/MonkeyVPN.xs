@@ -22,6 +22,7 @@ crypt_xor(SV *sv_string, SV *sv_secret)
 		STRLEN string_size, secret_size;
 		uint8_t *string = (uint8_t *)SvPVbyte(sv_string, string_size);
 		uint8_t *secret = (uint8_t *)SvPVbyte(sv_secret, secret_size);
+		if(string_size == 0 || secret_size == 0 ) return;
 		// xor encrypt the buffer
 		int m, n;
 		for(m = 0; m < string_size; m++) {

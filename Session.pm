@@ -108,7 +108,13 @@ sub read_packet_header {
 	my ($self) = @_;
 	$self->handle->push_read( chunk => 2, sub {
 			my $body_len = unpack('n', $_[1]);
-			$self->read_packet_body($body_len);
+			if($body_len == 65535) { # keepalive message, ignore it.
+				AE::log info => "Got keep alive message";
+				$self->read_packet_header;
+			}
+			else {
+				$self->read_packet_body($body_len);
+			}
 		}
 	);
 }
