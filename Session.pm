@@ -54,8 +54,8 @@ sub make_shared_secret {
 	my ($self) = @_;
 
 	# send my public key to client.
-	$self->handle->push_write($self->pubkey);
-	$self->handle->push_read( chunk => 64, sub {
+	$self->push_write($self->pubkey);
+	$self->push_read( chunk => 64, sub {
 			if(!MicroECC::valid_public_key($_[1], $self->{curve})) {
 				print "Client public key is INVALID.\n";
 				$self->shutdown;
@@ -74,12 +74,12 @@ sub make_shared_secret {
 
 sub read_credential {
 	my ($self) = @_;
-	$self->handle->push_read(chunk => 2, sub {
+	$self->push_read(chunk => 2, sub {
 		my ($credential_len, $lzf) = unpack 'C2', $_[1];
 		printf "Credential len: %d\n", $credential_len;
 
 		# read MAC, username . '|' .  password.
-		$self->handle->push_read( chunk => $credential_len, sub {
+		$self->push_read( chunk => $credential_len, sub {
 			# XOR decrypt the credential.
 			MonkeyVPN::crypt_xor($_[1], $self->{shared_secret});
 			my $MAC = substr $_[1], 0, 6;
@@ -92,25 +92,28 @@ sub read_credential {
 
 			# authenticate user and send auth result.
 			my $result = $self->authenticate($user, $pass);
-			$self->handle->push_write(pack('C', $result));
+			$self->push_write(pack('C', $result));
 
 			if(!$result) {
+				$self->{handle}->push_shutdown;
 				$self->shutdown;
 			}
-
-			# start read packet.
-			$self->read_packet_header;
+			else {
+				# start read packet.
+				$self->keepalive;
+				$self->read_packet_header;
+			}
 		});
 	});
 }
 
 sub read_packet_header {
 	my ($self) = @_;
-	$self->handle->push_read( chunk => 2, sub {
+	$self->push_read( chunk => 2, sub {
 			my $body_len = unpack('n', $_[1]);
-			if($body_len == 65535) { # keepalive message, ignore it.
-				AE::log info => "Got keep alive message";
-				$self->read_packet_header;
+			if($body_len > 2048) {
+				AE::log error => "Invalid packet length from server: %d", $body_len;
+				$self->shutdown;
 			}
 			else {
 				$self->read_packet_body($body_len);
@@ -121,7 +124,7 @@ sub read_packet_header {
 
 sub read_packet_body {
 	my ($self, $body_len) = @_;
-	$self->handle->push_read( chunk => $body_len, sub {
+	$self->push_read( chunk => $body_len, sub {
 			MonkeyVPN::crypt_xor($_[1], $self->{shared_secret});
 			my $decompressed = LZF::decompress($_[1]);
 			$self->{tap_handle}->push_write($decompressed);
@@ -146,30 +149,42 @@ sub authenticate {
 sub shutdown {
 	my ($self) = @_;
 	print "Session shutdown.\n";
+	delete $self->{keepalive_timer};
 	$self->{handle}->destroy;
 	$self->{closed} = 1;
 }
 
-# write data comes from local tap device to remote.
+# write a whole packet comes from local tap device to remote. 
 sub write {
 	my ($self, $frame) = @_;
-
-	# LZF compress the frame, then xor.
-	{
-		use bytes;
-		my $compressed = LZF::compress($frame);
-		my $len = length $compressed;
-
-		MonkeyVPN::crypt_xor($compressed, $self->{shared_secret});
-		$self->handle->push_write( pack('n', $len) );
-		$self->handle->push_write($compressed);
+	if(length($frame) > 2048) {
+		AE::log error => "Invalid packet length received from tap: %d", length($frame);
+		$self->shutdown;
 	}
 
+	my $compressed = LZF::compress($frame);
+	my $len = length $compressed;
+
+	MonkeyVPN::crypt_xor($compressed, $self->{shared_secret});
+	$self->push_write( pack('n', $len) );
+	$self->push_write($compressed);
+
+}
+
+sub keepalive {
+	my ($self) = @_;
+	$self->{keepalive_timer} = AnyEvent->timer( after => 30, interval => 30, cb => sub {
+			$self->push_write( pack('n', 0) );
+		}
+	);
 }
 
 sub host    { shift->{host} }
 sub port    { shift->{port} }
-sub handle  { shift->{handle} }
+
+sub push_write { shift->{handle}->push_write(@_) }
+sub push_read  { shift->{handle}->push_read(@_) }
+
 sub pubkey  { shift->{pubkey} }
 sub privkey { shift->{privkey} }
 

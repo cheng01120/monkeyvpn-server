@@ -14,8 +14,36 @@ use AnyEvent::Socket;
 use MonkeyVPN qw/tun_alloc/;
 use Session;
 
+my $pidFile = "/tmp/monkeyvpn.pid";
+
+if(1 == @ARGV) {
+	my $act = shift;
+	if($act ne "stop" && $act ne "restart") {
+		print "Usage: $0 [ start | stop ]\n";
+		exit 1;
+	}
+
+	# get pid
+	if(! -f  $pidFile) {
+		print "No pid file, do nothing.\n";
+	}
+	else {
+		open my $fh, "</tmp/monkeyvpn.pid" or die "Unable to open $pidFile";
+		my $pid = <$fh>;
+		close $fh;
+		unlink $pidFile;
+
+		chomp $pid;
+		# stop, restart
+		kill 'KILL', $pid;
+		if($act eq "stop") {
+			exit 0;
+		}
+	}
+}
+
 $AnyEvent::Log::COLLECT->attach (new AnyEvent::Log::Ctx
-	level         => "warn",
+	level         => "info",
 	log_to_syslog => "user",
 );
 
