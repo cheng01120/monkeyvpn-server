@@ -1,6 +1,6 @@
 package MonkeyVPN;
 
-use 5.022001;
+use 5.016001;
 use strict;
 use warnings;
 

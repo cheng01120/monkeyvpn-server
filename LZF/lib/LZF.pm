@@ -1,6 +1,6 @@
 package LZF;
 
-use 5.026001;
+use 5.016001;
 use strict;
 use warnings;
 
